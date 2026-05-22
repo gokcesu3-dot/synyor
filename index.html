@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Synyor - Akıllı Alışveriş</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0a0a0a;
+      color: #fff;
+      min-height: 100vh;
+    }
+
+    .header {
+      text-align: center;
+      padding: 60px 20px 40px;
+      background: linear-gradient(135deg, #1a1a2e, #16213e);
+    }
+
+    .logo {
+      font-size: 48px;
+      font-weight: 900;
+      background: linear-gradient(135deg, #f5a623, #f76b1c);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: 3px;
+    }
+
+    .tagline {
+      color: #888;
+      margin-top: 10px;
+      font-size: 16px;
+    }
+
+    .search-box {
+      max-width: 700px;
+      margin: 40px auto;
+      padding: 0 20px;
+    }
+
+    .search-input {
+      width: 100%;
+      padding: 20px 25px;
+      border-radius: 15px;
+      border: 2px solid #333;
+      background: #1a1a1a;
+      color: #fff;
+      font-size: 18px;
+      outline: none;
+      transition: border 0.3s;
+    }
+
+    .search-input:focus {
+      border-color: #f5a623;
+    }
+
+    .budget-input {
+      width: 100%;
+      padding: 15px 25px;
+      border-radius: 15px;
+      border: 2px solid #333;
+      background: #1a1a1a;
+      color: #fff;
+      font-size: 16px;
+      outline: none;
+      margin-top: 15px;
+      transition: border 0.3s;
+    }
+
+    .budget-input:focus {
+      border-color: #f5a623;
+    }
+
+    .search-btn {
+      width: 100%;
+      padding: 18px;
+      margin-top: 15px;
+      border-radius: 15px;
+      border: none;
+      background: linear-gradient(135deg, #f5a623, #f76b1c);
+      color: #fff;
+      font-size: 18px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.3s;
+      letter-spacing: 1px;
+    }
+
+    .search-btn:hover { opacity: 0.9; }
+    .search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+      display: none;
+    }
+
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 4px solid #333;
+      border-top: 4px solid #f5a623;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 20px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .results {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    .section-title {
+      font-size: 24px;
+      font-weight: 700;
+      margin: 30px 0 20px;
+      color: #f5a623;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 20px;
+    }
+
+    .card {
+      background: #1a1a1a;
+      border-radius: 15px;
+      padding: 20px;
+      border: 1px solid #333;
+      transition: transform 0.3s, border 0.3s;
+      position: relative;
+    }
+
+    .card:hover {
+      transform: translateY(-5px);
+      border-color: #f5a623;
+    }
+
+    .card.oneri {
+      border-color: #f5a623;
+      background: linear-gradient(135deg, #1a1a1a, #1e1a10);
+    }
+
+    .rank-badge {
+      position: absolute;
+      top: -10px;
+      left: -10px;
+      width: 35px;
+      height: 35px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #f5a623, #f76b1c);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 16px;
+    }
+
+    .card img {
+      width: 100%;
+      height: 180px;
+      object-fit: contain;
+      border-radius: 10px;
+      background: #111;
+      margin-bottom: 15px;
+    }
+
+    .card-name {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 10px;
+      line-height: 1.4;
+      color: #eee;
+    }
+
+    .card-price {
+      font-size: 20px;
+      font-weight: 900;
+      color: #f5a623;
+      margin-bottom: 10px;
+    }
+
+    .card-reason {
+      font-size: 13px;
+      color: #888;
+      line-height: 1.5;
+      margin-bottom: 15px;
+    }
+
+    .card-btn {
+      display: block;
+      text-align: center;
+      padding: 12px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #f5a623, #f76b1c);
+      color: #fff;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 14px;
+      transition: opacity 0.3s;
+    }
+
+    .card-btn:hover { opacity: 0.8; }
+
+    .error {
+      text-align: center;
+      color: #ff4444;
+      padding: 20px;
+      font-size: 18px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo">SYNYOR</div>
+    <div class="tagline">Akıllı Alışveriş Asistanın</div>
+  </div>
+
+  <div class="search-box">
+    <input 
+      type="text" 
+      class="search-input" 
+      id="query" 
+      placeholder="Ne aramak istiyorsunuz? (örn: nike ayakkabı)"
+    />
+    <input 
+      type="number" 
+      class="budget-input" 
+      id="butce" 
+      placeholder="Maksimum bütçe (TL) - Boş bırakabilirsiniz"
+    />
+    <button class="search-btn" id="searchBtn" onclick="ara()">
+      🔍 Synyor ile Ara
+    </button>
+  </div>
+
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <p>Synyor en iyi fırsatları buluyor...</p>
+  </div>
+
+  <div class="results" id="results"></div>
+
+  <script>
+    function platformButonu(p) {
+      if (p === 'Hepsiburada') return "Hepsiburada'da Gör →";
+      if (p === 'N11') return "N11'de Gör →";
+      return "Trendyol'da Gör →";
+    }
+
+    async function ara() {
+      const query = document.getElementById('query').value.trim();
+      const butce = document.getElementById('butce').value.trim();
+
+      if (!query) {
+        alert('Lütfen bir şey arayın!');
+        return;
+      }
+
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('results').innerHTML = '';
+      document.getElementById('searchBtn').disabled = true;
+
+      try {
+        const response = await fetch('http://localhost:3000/api/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, butce: butce || null })
+        });
+
+        const data = await response.json();
+
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('searchBtn').disabled = false;
+
+        if (data.error) {
+          document.getElementById('results').innerHTML = `<div class="error">${data.error}</div>`;
+          return;
+        }
+
+        let html = '<div class="section-title">🏆 Synyor\'un En İyi Önerileri</div>';
+        html += '<div class="cards">';
+
+        data.oneriler.forEach((urun, idx) => {
+          html += `
+            <div class="card oneri">
+              <div class="rank-badge">${idx + 1}</div>
+              ${urun.img ? `<img src="${urun.img}" alt="${urun.urun}" onerror="this.style.display='none'">` : ''}
+              <div class="card-name">${urun.urun}</div>
+              <div class="card-price">${urun.fiyat}</div>
+              <div class="card-reason">${urun.neden || ''}</div>
+              ${urun.link ? `<a href="${urun.link}" target="_blank" class="card-btn">${platformButonu(urun.platform)}</a>` : ''}
+            </div>
+          `;
+        });
+
+        html += '</div>';
+
+        html += '<div class="section-title">📦 Tüm Sonuçlar</div>';
+        html += '<div class="cards">';
+
+        data.tumUrunler.forEach(urun => {
+          html += `
+            <div class="card">
+              ${urun.img ? `<img src="${urun.img}" alt="${urun.urun}" onerror="this.style.display='none'">` : ''}
+              <div class="card-name">${urun.urun}</div>
+              <div class="card-price">${urun.fiyat}</div>
+              ${urun.link ? `<a href="${urun.link}" target="_blank" class="card-btn">${platformButonu(urun.platform)}</a>` : ''}
+            </div>
+          `;
+        });
+
+        html += '</div>';
+        document.getElementById('results').innerHTML = html;
+
+      } catch (err) {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('searchBtn').disabled = false;
+        document.getElementById('results').innerHTML = '<div class="error">Sunucu çalışmıyor! node server.js çalıştır.</div>';
+      }
+    }
+
+    document.getElementById('query').addEventListener('keypress', e => {
+      if (e.key === 'Enter') ara();
+    });
+  </script>
+
+</body>
+</html>

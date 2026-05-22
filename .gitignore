@@ -1,0 +1,20 @@
+# Gizli ortam değişkenleri (API key'ler burada)
+.env
+.env.local
+.env.*.local
+
+# Node bağımlılıkları
+node_modules/
+
+# Loglar
+*.log
+npm-debug.log*
+
+# OS / editör
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Claude Code yerel ayarları
+.claude/
