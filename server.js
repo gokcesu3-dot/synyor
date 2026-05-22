@@ -41,7 +41,7 @@ async function trendyolScraper(query, butce) {
     window.chrome = { runtime: {} };
   });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-  await page.goto(`https://www.trendyol.com/sr?q=${encodeURIComponent(query)}&os=1`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(`https://www.trendyol.com/sr?q=${encodeURIComponent(query)}&os=1`, { waitUntil: 'domcontentloaded', timeout: 15000 });
   await bekle(3000);
 
   const products = await page.evaluate(() => {
@@ -99,7 +99,7 @@ async function hepsiburadaScraper(query, butce) {
   const browser = await launchBrowser();
   const page = await browser.newPage();
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-  await page.goto(`https://www.hepsiburada.com/ara?q=${encodeURIComponent(query)}`, { waitUntil: 'networkidle2', timeout: 30000 });
+  await page.goto(`https://www.hepsiburada.com/ara?q=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
   await bekle(3000);
 
   const products = await page.evaluate(() => {
@@ -181,7 +181,7 @@ async function n11Scraper(query, butce) {
     Object.defineProperty(navigator, 'webdriver', { get: () => false });
   });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-  await page.goto(`https://www.n11.com/arama?q=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(`https://www.n11.com/arama?q=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
   await bekle(3000);
 
   // Lazy-load görselleri tetiklemek için sayfayı kaydır
@@ -313,11 +313,12 @@ app.post('/api/search', async (req, res) => {
 
     const butceSayi = butce ? parseFloat(butce) : null;
 
-    const [trendyol, hepsiburada, n11] = await Promise.all([
-      trendyolScraper(query, butceSayi).catch(e => { console.error('Trendyol hata:', e.message); return []; }),
-      hepsiburadaScraper(query, butceSayi).catch(e => { console.error('Hepsiburada hata:', e.message); return []; }),
-      n11Scraper(query, butceSayi).catch(e => { console.error('N11 hata:', e.message); return []; })
-    ]);
+    const trendyol = await trendyolScraper(query, butceSayi)
+      .catch(e => { console.error('Trendyol hata:', e.message); return []; });
+    const hepsiburada = await hepsiburadaScraper(query, butceSayi)
+      .catch(e => { console.error('Hepsiburada hata:', e.message); return []; });
+    const n11 = await n11Scraper(query, butceSayi)
+      .catch(e => { console.error('N11 hata:', e.message); return []; });
 
     console.log(`Trendyol: ${trendyol.length}, Hepsiburada: ${hepsiburada.length}, N11: ${n11.length}`);
 
