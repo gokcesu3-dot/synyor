@@ -135,11 +135,12 @@ function randomMobileUA() {
   return MOBILE_UA_LIST[Math.floor(Math.random() * MOBILE_UA_LIST.length)];
 }
 
-// Bright Data Web Scraper API
-// POST https://api.brightdata.com/request, body { url, country }, Bearer auth
+// Bright Data Web Unlocker API
+// POST https://api.brightdata.com/request, body { zone, url, format }, Bearer auth
 const BRIGHT_DATA_AKTIF = !!process.env.BRIGHT_DATA_KEY;
 const BRIGHT_DATA_ENDPOINT = 'https://api.brightdata.com/request';
-const BRIGHT_DATA_COUNTRY = 'tr';
+const BRIGHT_DATA_ZONE = process.env.BRIGHT_DATA_ZONE || 'web_unlocker1';
+const BRIGHT_DATA_FORMAT = 'raw';
 
 // Generic retry: birden fazla URL ve deneme, exponential backoff + jitter
 async function fetchRetry({ urls, headersFn, retries = 3, timeoutMs = 15000, baseDelayMs = 800, etiket = 'fetch' }) {
@@ -149,14 +150,18 @@ async function fetchRetry({ urls, headersFn, retries = 3, timeoutMs = 15000, bas
     try {
       let r;
       if (BRIGHT_DATA_AKTIF) {
-        // Bright Data: POST api.brightdata.com/request, body { url, country }
-        r = await fetch(BRIGHT_DATA_ENDPOINT, {
+        // Bright Data Web Unlocker: POST api.brightdata.com/request
+        r = await fetch('https://api.brightdata.com/request', {
           method: 'POST',
           headers: {
-            'Authorization': 'Bearer ' + process.env.BRIGHT_DATA_KEY,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + process.env.BRIGHT_DATA_KEY
           },
-          body: JSON.stringify({ url, country: BRIGHT_DATA_COUNTRY }),
+          body: JSON.stringify({
+            zone: BRIGHT_DATA_ZONE,
+            url,
+            format: 'raw'
+          }),
           redirect: 'follow',
           signal: AbortSignal.timeout(timeoutMs)
         });
@@ -978,7 +983,7 @@ const server = app.listen(PORT, () => {
   console.log(`Synyor calisiyor: port ${PORT}`);
   console.log('Trendyol + Hepsiburada + N11 aktif!');
   if (BRIGHT_DATA_AKTIF) {
-    console.log(`Bright Data AKTIF: POST ${BRIGHT_DATA_ENDPOINT} (country=${BRIGHT_DATA_COUNTRY}) uzerinden Trendyol + N11`);
+    console.log(`Bright Data Web Unlocker AKTIF: zone="${BRIGHT_DATA_ZONE}" format="${BRIGHT_DATA_FORMAT}" -> Trendyol + N11`);
   } else {
     console.warn('UYARI: BRIGHT_DATA_KEY .env\'de yok - Trendyol/N11 dogrudan istekle gidiyor (Render IP\'si engellenebilir)');
   }
