@@ -125,7 +125,7 @@ function fiyatBicimle(n) {
   }) + ' TL';
 }
 
-// Mobil tarayici UA'lari (bot tespiti mobil tarafa daha gevsek)
+// Mobil tarayici UA'lari (Bright Data devre disi/N11 fetch retry icin)
 const MOBILE_UA_LIST = [
   'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
@@ -136,13 +136,14 @@ function randomMobileUA() {
 }
 
 // Bright Data Web Unlocker API
-// POST https://api.brightdata.com/request, body { zone, url, format }, Bearer auth
 const BRIGHT_DATA_AKTIF = !!process.env.BRIGHT_DATA_KEY;
 const BRIGHT_DATA_ENDPOINT = 'https://api.brightdata.com/request';
 const BRIGHT_DATA_ZONE = process.env.BRIGHT_DATA_ZONE || 'web_unlocker1';
 const BRIGHT_DATA_FORMAT = 'raw';
+const BRIGHT_DATA_COUNTRY = 'tr';
 
-// Generic retry: birden fazla URL ve deneme, exponential backoff + jitter
+// Generic retry: birden fazla URL ve deneme, exponential backoff + jitter.
+// Bright Data aktifse POST /request uzerinden gider, degilse dogrudan fetch.
 async function fetchRetry({ urls, headersFn, retries = 3, timeoutMs = 15000, baseDelayMs = 800, etiket = 'fetch' }) {
   let lastErr = null;
   for (let i = 0; i < retries; i++) {
@@ -150,8 +151,7 @@ async function fetchRetry({ urls, headersFn, retries = 3, timeoutMs = 15000, bas
     try {
       let r;
       if (BRIGHT_DATA_AKTIF) {
-        // Bright Data Web Unlocker: POST api.brightdata.com/request
-        r = await fetch('https://api.brightdata.com/request', {
+        r = await fetch(BRIGHT_DATA_ENDPOINT, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -160,7 +160,8 @@ async function fetchRetry({ urls, headersFn, retries = 3, timeoutMs = 15000, bas
           body: JSON.stringify({
             zone: BRIGHT_DATA_ZONE,
             url,
-            format: 'raw'
+            format: BRIGHT_DATA_FORMAT,
+            country: BRIGHT_DATA_COUNTRY
           }),
           redirect: 'follow',
           signal: AbortSignal.timeout(timeoutMs)
@@ -175,8 +176,6 @@ async function fetchRetry({ urls, headersFn, retries = 3, timeoutMs = 15000, bas
       if (r.ok) return { response: r, url };
       lastErr = new Error(`HTTP ${r.status}`);
       console.error(`${etiket} deneme ${i + 1}/${retries} -> ${r.status} (${url})`);
-      // 403/429 => bekle, baska endpoint dene
-      // 4xx digerleri (ornegin 404) => kalici, dur
       if (r.status >= 400 && r.status < 500 && r.status !== 403 && r.status !== 429 && r.status !== 408) {
         throw lastErr;
       }
@@ -192,7 +191,7 @@ async function fetchRetry({ urls, headersFn, retries = 3, timeoutMs = 15000, bas
   throw lastErr || new Error(`${etiket}: tum denemeler basarisiz`);
 }
 
-// Trendyol www HTML fallback: api unsuz/Render IP'si engellenmisse SSR sayfasindan oku
+// Trendyol HTML fallback: API tutmazsa SSR sayfasindan oku
 async function trendyolHtmlFallback(query) {
   const qEnc = encodeURIComponent(query);
   const urls = [
@@ -222,7 +221,6 @@ async function trendyolHtmlFallback(query) {
   });
   const html = await response.text();
 
-  // __SEARCH_APP_INITIAL_STATE__ JSON'unu cikar
   const m = html.match(/__SEARCH_APP_INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});\s*(?:window\.|<\/script>)/);
   if (m) {
     try {
@@ -234,7 +232,6 @@ async function trendyolHtmlFallback(query) {
     }
   }
 
-  // Yine de bos ise __NUXT_DATA__ veya alternatif state'leri dene
   const m2 = html.match(/window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});/);
   if (m2) {
     try {
@@ -244,9 +241,6 @@ async function trendyolHtmlFallback(query) {
     } catch (_) {}
   }
 
-  // En basit fallback: HTML icindeki data attribute'lerden urun bilgisini regex ile cek
-  // Trendyol kartlari "p-card-wrppr" classli div'lerde, icinde JSON yok ama linkler ve isimler var.
-  // Sirf burayi son care olarak biraz veri toplama amaciyla yapalim:
   const items = [];
   const cardRe = /<div[^>]+class="[^"]*\bp-card-wrppr\b[^"]*"[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/g;
   let c;
@@ -270,10 +264,9 @@ async function trendyolHtmlFallback(query) {
   return items;
 }
 
-// TRENDYOL SCRAPER - birden fazla public endpoint + retry
+// TRENDYOL SCRAPER - public API + HTML fallback, Bright Data Web Unlocker uzerinden
 async function trendyolScraper(query, butce) {
   const qEnc = encodeURIComponent(query);
-  // Trendyol'un birden fazla CDN/regional API noktasi var, IP'ye gore bazilari acik kalabilir
   const endpoints = [
     `https://public-mdc.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`,
     `https://public.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`,
@@ -281,7 +274,7 @@ async function trendyolScraper(query, butce) {
     `https://apigw.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`
   ];
 
-  const headersFn = (i) => ({
+  const headersFn = () => ({
     'User-Agent': randomUA(),
     'Accept': 'application/json, text/plain, */*',
     'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -304,11 +297,9 @@ async function trendyolScraper(query, butce) {
       timeoutMs: BRIGHT_DATA_AKTIF ? 60000 : 15000,
       etiket: 'Trendyol API'
     });
-    // Once text al, sonra safe JSON parse - Bright Data bos/HTML/error donderebilir
+    // Safe JSON parse - Bright Data bos/HTML donderebilir
     const text = await response.text();
-    if (!text || !text.trim()) {
-      throw new Error('Trendyol API: bos response');
-    }
+    if (!text || !text.trim()) throw new Error('Trendyol API: bos response');
     let data;
     try {
       data = JSON.parse(text);
@@ -323,7 +314,6 @@ async function trendyolScraper(query, butce) {
     apiBasarisiz = true;
   }
 
-  // API tutmadiysa veya bos donduyse HTML fallback
   if (apiBasarisiz || raw.length === 0) {
     try {
       raw = await trendyolHtmlFallback(query);
@@ -469,10 +459,9 @@ async function hepsiburadaScraper(query, butce) {
   });
 }
 
-// N11 anasayfasini cagirip Set-Cookie'den cerez topla - bot tespitini atlatmaya yardimci
+// N11 cookie warm-up - Bright Data devre disi durumlarda yardimci
 let _n11CookieCache = { cookies: '', expires: 0 };
 async function n11Cookies(ua) {
-  // Bright Data aktifse cerez warm-up gereksiz - proxy oturumu kendi tarafinda yonetir
   if (BRIGHT_DATA_AKTIF) return '';
   if (_n11CookieCache.expires > Date.now() && _n11CookieCache.cookies) {
     return _n11CookieCache.cookies;
@@ -489,7 +478,6 @@ async function n11Cookies(ua) {
       redirect: 'follow',
       signal: AbortSignal.timeout(10000)
     });
-    // Node fetch'de tum Set-Cookie satirlarini virgulle birlestirir; getSetCookie ile dizi al
     const raws = typeof r.headers.getSetCookie === 'function'
       ? r.headers.getSetCookie()
       : (r.headers.raw && r.headers.raw()['set-cookie']) || [];
@@ -506,12 +494,11 @@ async function n11Cookies(ua) {
   }
 }
 
-// N11 SCRAPER - search HTML + embedded JSON-LD, retry + mobil fallback
+// N11 SCRAPER - search HTML + embedded JSON-LD, Bright Data Web Unlocker uzerinden
 async function n11Scraper(query, butce) {
   const qEnc = encodeURIComponent(query);
   const desktopUrl = `https://www.n11.com/arama?q=${qEnc}`;
   const mobileUrl = `https://m.n11.com/arama?q=${qEnc}`;
-  // Once desktop, fail edersse mobile, sonra tekrar desktop farkli UA
   const urls = [desktopUrl, mobileUrl, desktopUrl, mobileUrl];
 
   const headersFn = (i) => {
@@ -543,16 +530,13 @@ async function n11Scraper(query, butce) {
 
   let html = '';
   try {
-    // Warm-up cookie (desktop UA, ilk denemenin UA'siyla uyumlu olsun diye sade)
     const warmUA = randomUA();
     const cookies = await n11Cookies(warmUA);
-
     const headersWithCookie = (i) => {
       const h = headersFn(i);
       if (cookies) h['Cookie'] = cookies;
       return h;
     };
-
     const { response } = await fetchRetry({
       urls,
       headersFn: headersWithCookie,
@@ -564,12 +548,11 @@ async function n11Scraper(query, butce) {
     html = await response.text();
   } catch (e) {
     console.error('N11 tum denemeler basarisiz:', e.message);
-    // Cookie cache'i sifirla (belki bayatladi)
     _n11CookieCache = { cookies: '', expires: 0 };
     return [];
   }
 
-  // 1) JSON-LD ItemList icinden urun listesi cikar
+  // 1) JSON-LD ItemList
   const items = [];
   const ldRegex = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let m;
@@ -603,7 +586,7 @@ async function n11Scraper(query, butce) {
     } catch (_) {}
   }
 
-  // 2) JSON-LD bulunamadiysa HTML kart yapisinden regex ile cek
+  // 2) Fallback HTML kart regex
   if (items.length === 0) {
     const cardRe = /<a[^>]+class="[^"]*\bproduct-item\b[^"]*"[^>]+href="([^"]+)"[\s\S]*?(?=<a[^>]+class="[^"]*\bproduct-item\b|<\/li>)/g;
     let c;
@@ -611,7 +594,6 @@ async function n11Scraper(query, butce) {
       const chunk = c[0];
       const href = c[1];
       if (!href.includes('/urun/')) continue;
-
       const nameM =
         chunk.match(/<img[^>]+class="[^"]*listing-items-image[^"]*"[^>]+alt="([^"]+)"/) ||
         chunk.match(/title="([^"]+)"/) ||
@@ -620,11 +602,9 @@ async function n11Scraper(query, butce) {
         chunk.match(/<img[^>]+class="[^"]*listing-items-image[^"]*"[^>]+(?:data-src|src)="(https?:[^"]+)"/) ||
         chunk.match(/<img[^>]+(?:data-src|src)="(https?:[^"]+)"/);
       const priceM = chunk.match(/([\d.]+,\d{2})\s*TL/) || chunk.match(/(\d[\d.]*)\s*TL/);
-
       if (!nameM || !priceM) continue;
       const fiyatNum = parseFloat(priceM[1].replace(/\./g, '').replace(',', '.'));
       if (!fiyatNum || isNaN(fiyatNum)) continue;
-
       const linkAbs = href.startsWith('http') ? href : `https://www.n11.com${href}`;
       items.push({
         urun: nameM[1].trim().substring(0, 80),
@@ -995,9 +975,9 @@ const server = app.listen(PORT, () => {
   console.log(`Synyor calisiyor: port ${PORT}`);
   console.log('Trendyol + Hepsiburada + N11 aktif!');
   if (BRIGHT_DATA_AKTIF) {
-    console.log(`Bright Data Web Unlocker AKTIF: zone="${BRIGHT_DATA_ZONE}" format="${BRIGHT_DATA_FORMAT}" -> Trendyol + N11`);
+    console.log(`Bright Data Web Unlocker AKTIF: zone="${BRIGHT_DATA_ZONE}" format="${BRIGHT_DATA_FORMAT}" country="${BRIGHT_DATA_COUNTRY}" -> Trendyol + N11`);
   } else {
-    console.warn('UYARI: BRIGHT_DATA_KEY .env\'de yok - Trendyol/N11 dogrudan istekle gidiyor (Render IP\'si engellenebilir)');
+    console.warn('UYARI: BRIGHT_DATA_KEY .env\'de yok - Trendyol/N11 dogrudan istekle gidiyor');
   }
   // Browser'i onceden baslat: ilk arama da hizli olsun
   getBrowser().catch(e => console.error('Browser onayli baslatma hatasi:', e.message));
