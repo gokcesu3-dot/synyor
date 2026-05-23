@@ -117,242 +117,91 @@ function urunAlakaliMi(urunAdi, query) {
   return true;
 }
 
-// Yardimcilar: fiyat bicimleme
-function fiyatBicimle(n) {
-  return n.toLocaleString('tr-TR', {
-    minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
-    maximumFractionDigits: 2
-  }) + ' TL';
-}
-
-// Mobil tarayici UA'lari (Bright Data devre disi/N11 fetch retry icin)
-const MOBILE_UA_LIST = [
-  'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
-  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36'
-];
-function randomMobileUA() {
-  return MOBILE_UA_LIST[Math.floor(Math.random() * MOBILE_UA_LIST.length)];
-}
-
-// Bright Data Web Unlocker API
-const BRIGHT_DATA_AKTIF = !!process.env.BRIGHT_DATA_KEY;
-const BRIGHT_DATA_ENDPOINT = 'https://api.brightdata.com/request';
-const BRIGHT_DATA_ZONE = process.env.BRIGHT_DATA_ZONE || 'web_unlocker1';
-const BRIGHT_DATA_FORMAT = 'raw';
-const BRIGHT_DATA_COUNTRY = 'tr';
-
-// Generic retry: birden fazla URL ve deneme, exponential backoff + jitter.
-// Bright Data aktifse POST /request uzerinden gider, degilse dogrudan fetch.
-async function fetchRetry({ urls, headersFn, retries = 3, timeoutMs = 15000, baseDelayMs = 800, etiket = 'fetch' }) {
-  let lastErr = null;
-  for (let i = 0; i < retries; i++) {
-    const url = urls[i % urls.length];
-    try {
-      let r;
-      if (BRIGHT_DATA_AKTIF) {
-        r = await fetch(BRIGHT_DATA_ENDPOINT, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + process.env.BRIGHT_DATA_KEY
-          },
-          body: JSON.stringify({
-            zone: BRIGHT_DATA_ZONE,
-            url,
-            format: BRIGHT_DATA_FORMAT,
-            country: BRIGHT_DATA_COUNTRY
-          }),
-          redirect: 'follow',
-          signal: AbortSignal.timeout(timeoutMs)
-        });
-      } else {
-        r = await fetch(url, {
-          headers: headersFn(i),
-          redirect: 'follow',
-          signal: AbortSignal.timeout(timeoutMs)
-        });
-      }
-      if (r.ok) return { response: r, url };
-      lastErr = new Error(`HTTP ${r.status}`);
-      console.error(`${etiket} deneme ${i + 1}/${retries} -> ${r.status} (${url})`);
-      if (r.status >= 400 && r.status < 500 && r.status !== 403 && r.status !== 429 && r.status !== 408) {
-        throw lastErr;
-      }
-    } catch (e) {
-      lastErr = e;
-      console.error(`${etiket} deneme ${i + 1}/${retries} -> ${e.message} (${url})`);
-    }
-    if (i < retries - 1) {
-      const wait = baseDelayMs * Math.pow(1.8, i) + Math.floor(Math.random() * 500);
-      await bekle(wait);
-    }
-  }
-  throw lastErr || new Error(`${etiket}: tum denemeler basarisiz`);
-}
-
-// Trendyol HTML fallback: API tutmazsa SSR sayfasindan oku
-async function trendyolHtmlFallback(query) {
-  const qEnc = encodeURIComponent(query);
-  const urls = [
-    `https://www.trendyol.com/sr?q=${qEnc}`,
-    `https://www.trendyol.com/sr?q=${qEnc}&os=1`
-  ];
-  const headersFn = (i) => ({
-    'User-Agent': i % 2 === 0 ? randomUA() : randomMobileUA(),
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Accept-Encoding': 'gzip, deflate',
-    'Referer': 'https://www.google.com/',
-    'Upgrade-Insecure-Requests': '1',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'cross-site',
-    'Sec-Fetch-User': '?1',
-    ...CHROME_CLIENT_HINTS
-  });
-
-  const { response } = await fetchRetry({
-    urls,
-    headersFn,
-    retries: 3,
-    timeoutMs: BRIGHT_DATA_AKTIF ? 60000 : 20000,
-    etiket: 'Trendyol HTML'
-  });
-  const html = await response.text();
-
-  const m = html.match(/__SEARCH_APP_INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});\s*(?:window\.|<\/script>)/);
-  if (m) {
-    try {
-      const state = JSON.parse(m[1]);
-      const products = state?.products || state?.searchResult?.products || [];
-      if (products.length > 0) return products;
-    } catch (e) {
-      console.error('Trendyol __SEARCH_APP_INITIAL_STATE__ parse hata:', e.message);
-    }
-  }
-
-  const m2 = html.match(/window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});/);
-  if (m2) {
-    try {
-      const state = JSON.parse(m2[1]);
-      const products = state?.searchResult?.products || state?.products || [];
-      if (products.length > 0) return products;
-    } catch (_) {}
-  }
-
-  const items = [];
-  const cardRe = /<div[^>]+class="[^"]*\bp-card-wrppr\b[^"]*"[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/g;
-  let c;
-  while ((c = cardRe.exec(html)) !== null && items.length < 20) {
-    const chunk = c[0];
-    const linkM = chunk.match(/<a[^>]+href="(\/[^"]+)"/);
-    const nameM = chunk.match(/<span[^>]+class="prdct-desc-cntnr-name[^"]*"[^>]*>([^<]+)</)
-              || chunk.match(/title="([^"]+)"/);
-    const priceM = chunk.match(/([\d.]+,\d{2})\s*TL/);
-    const imgM = chunk.match(/<img[^>]+src="(https:[^"]+)"/);
-    if (!linkM || !nameM || !priceM) continue;
-    const fiyatNum = parseFloat(priceM[1].replace(/\./g, '').replace(',', '.'));
-    if (!fiyatNum) continue;
-    items.push({
-      name: nameM[1].trim(),
-      url: linkM[1],
-      price: { sellingPrice: { value: fiyatNum } },
-      images: imgM ? [imgM[1]] : []
-    });
-  }
-  return items;
-}
-
-// TRENDYOL SCRAPER - public API + HTML fallback, Bright Data Web Unlocker uzerinden
+// TRENDYOL SCRAPER - Puppeteer, paylasilan browser uzerinden yeni tab
 async function trendyolScraper(query, butce) {
-  const qEnc = encodeURIComponent(query);
-  const endpoints = [
-    `https://public-mdc.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`,
-    `https://public.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`,
-    `https://public-sdc.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`,
-    `https://apigw.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`
-  ];
+  return withPage(async (page) => {
+    await camufleEt(page, randomUA());
+    await page.setExtraHTTPHeaders(gercekciHeaders({
+      referer: 'https://www.google.com/',
+      dil: 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
+    }));
 
-  const headersFn = () => ({
-    'User-Agent': randomUA(),
-    'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Accept-Encoding': 'gzip, deflate',
-    'Origin': 'https://www.trendyol.com',
-    'Referer': `https://www.trendyol.com/sr?q=${qEnc}`,
-    'Sec-Fetch-Dest': 'empty',
-    'Sec-Fetch-Mode': 'cors',
-    'Sec-Fetch-Site': 'same-site',
-    ...CHROME_CLIENT_HINTS
-  });
-
-  let raw = [];
-  let apiBasarisiz = false;
-  try {
-    const { response } = await fetchRetry({
-      urls: endpoints,
-      headersFn,
-      retries: endpoints.length,
-      timeoutMs: BRIGHT_DATA_AKTIF ? 60000 : 15000,
-      etiket: 'Trendyol API'
+    await page.goto(`https://www.trendyol.com/sr?q=${encodeURIComponent(query)}`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000
     });
-    // Safe JSON parse - Bright Data bos/HTML donderebilir
-    const text = await response.text();
-    if (!text || !text.trim()) throw new Error('Trendyol API: bos response');
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch (parseErr) {
-      console.error('Trendyol API JSON parse hata:', parseErr.message);
-      console.error('Response (ilk 500 char):', text.substring(0, 500));
-      throw new Error(`JSON parse: ${parseErr.message}`);
-    }
-    raw = data?.result?.products || [];
-  } catch (e) {
-    console.error('Trendyol API tum denemeler basarisiz, HTML fallback denenecek:', e.message);
-    apiBasarisiz = true;
-  }
+    await page.waitForSelector('a.product-card, div.p-card-wrppr', { timeout: 15000 }).catch(() => {});
 
-  if (apiBasarisiz || raw.length === 0) {
-    try {
-      raw = await trendyolHtmlFallback(query);
-    } catch (e) {
-      console.error('Trendyol HTML fallback hata:', e.message);
-      if (apiBasarisiz) return [];
-    }
-  }
+    // Lazy-load tetikle
+    await page.evaluate(async () => {
+      await new Promise(resolve => {
+        let y = 0;
+        const t = setInterval(() => {
+          window.scrollBy(0, 600);
+          y += 600;
+          if (y >= 4000) { clearInterval(t); resolve(); }
+        }, 50);
+      });
+    });
+    await bekle(700);
 
-  const items = raw.slice(0, 20).map(p => {
-    const fiyatNum =
-      p.price?.discountedPrice?.value ??
-      p.price?.sellingPrice?.value ??
-      p.price?.originalPrice?.value ?? 0;
+    const products = await page.evaluate(() => {
+      const items = [];
+      const cards = document.querySelectorAll('a.product-card, div.p-card-wrppr');
+      cards.forEach((card, idx) => {
+        if (idx >= 20) return;
 
-    let img = '';
-    const imgRaw = (Array.isArray(p.images) && p.images[0]) || p.imageUrl || '';
-    if (imgRaw) {
-      const s = typeof imgRaw === 'string' ? imgRaw : (imgRaw.url || '');
-      if (s) img = s.startsWith('http') ? s : `https://cdn.dsmcdn.com${s.startsWith('/') ? '' : '/'}${s}`;
-    }
+        const linkEl = card.tagName === 'A' ? card : card.querySelector('a');
+        const href = linkEl?.href || '';
+        if (!href) return;
 
-    const linkRaw = p.url || '';
-    const link = linkRaw.startsWith('http') ? linkRaw : `https://www.trendyol.com${linkRaw}`;
-    const ad = [p.brand?.name, p.name].filter(Boolean).join(' ').trim() || p.name || '';
+        const imgEls = Array.from(card.querySelectorAll('img'));
+        let img = '';
+        for (const el of imgEls) {
+          for (const attr of ['src', 'data-src']) {
+            const v = el.getAttribute(attr) || '';
+            if (v.startsWith('http') && !v.includes('data:image') && !v.includes('placeholder')) {
+              img = v; break;
+            }
+          }
+          if (img) break;
+        }
 
-    return {
-      urun: ad.substring(0, 80),
-      fiyat: fiyatBicimle(fiyatNum),
-      fiyatSayi: fiyatNum,
-      link,
-      img,
-      platform: 'Trendyol'
-    };
-  }).filter(p => p.urun && p.fiyatSayi > 0 && p.link);
+        const txt = (card.innerText || '').split('\n').map(t => t.trim()).filter(Boolean);
+        const fiyatSatiri = txt.find(t => /^[\d.,]+\s*TL$/.test(t));
+        const temizAd = txt.find(t =>
+          t.length > 10 &&
+          !t.includes('Hızlı') && !t.includes('Bakış') &&
+          !t.includes('En Çok') && !t.includes('Birlikte') &&
+          !t.includes('Sepette') && !t.includes('Kupon') &&
+          !t.includes('İndirim') && !t.includes('Ürün') &&
+          !t.includes('Satıcı') && !t.includes('Fiyatı') &&
+          !t.match(/^\d+$/) && !t.match(/\d+\s*TL$/)
+        );
 
-  let result = items.filter(p => urunAlakaliMi(p.urun, query));
-  if (butce) result = result.filter(p => p.fiyatSayi <= butce);
-  return result;
+        if (temizAd && fiyatSatiri) {
+          const fiyatSayi = parseFloat(
+            fiyatSatiri.replace(/\s*TL$/, '').replace(/\./g, '').replace(',', '.')
+          );
+          if (!isNaN(fiyatSayi) && fiyatSayi > 0) {
+            items.push({
+              urun: temizAd.substring(0, 80),
+              fiyat: fiyatSatiri,
+              fiyatSayi,
+              link: href,
+              img,
+              platform: 'Trendyol'
+            });
+          }
+        }
+      });
+      return items;
+    });
+
+    let result = products.filter(p => urunAlakaliMi(p.urun, query));
+    if (butce) result = result.filter(p => p.fiyatSayi <= butce);
+    return result;
+  });
 }
 
 
@@ -459,170 +308,77 @@ async function hepsiburadaScraper(query, butce) {
   });
 }
 
-// N11 cookie warm-up - Bright Data devre disi durumlarda yardimci
-let _n11CookieCache = { cookies: '', expires: 0 };
-async function n11Cookies(ua) {
-  if (BRIGHT_DATA_AKTIF) return '';
-  if (_n11CookieCache.expires > Date.now() && _n11CookieCache.cookies) {
-    return _n11CookieCache.cookies;
-  }
-  try {
-    const r = await fetch('https://www.n11.com/', {
-      headers: {
-        'User-Agent': ua,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
-        'Accept-Encoding': 'gzip, deflate',
-        'Upgrade-Insecure-Requests': '1'
-      },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(10000)
-    });
-    const raws = typeof r.headers.getSetCookie === 'function'
-      ? r.headers.getSetCookie()
-      : (r.headers.raw && r.headers.raw()['set-cookie']) || [];
-    const cookies = (Array.isArray(raws) ? raws : [raws])
-      .filter(Boolean)
-      .map(c => c.split(';')[0])
-      .filter(c => c && c.includes('='))
-      .join('; ');
-    _n11CookieCache = { cookies, expires: Date.now() + 5 * 60 * 1000 };
-    return cookies;
-  } catch (e) {
-    console.error('N11 cookie warm-up hata:', e.message);
-    return '';
-  }
-}
 
-// N11 SCRAPER - search HTML + embedded JSON-LD, Bright Data Web Unlocker uzerinden
+// N11 SCRAPER - Puppeteer, paylasilan browser uzerinden yeni tab
 async function n11Scraper(query, butce) {
-  const qEnc = encodeURIComponent(query);
-  const desktopUrl = `https://www.n11.com/arama?q=${qEnc}`;
-  const mobileUrl = `https://m.n11.com/arama?q=${qEnc}`;
-  const urls = [desktopUrl, mobileUrl, desktopUrl, mobileUrl];
+  return withPage(async (page) => {
+    await camufleEt(page, randomUA());
+    await page.setExtraHTTPHeaders(gercekciHeaders({
+      referer: 'https://www.n11.com/',
+      dil: 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
+    }));
 
-  const headersFn = (i) => {
-    const mobil = i % 2 === 1;
-    const ua = mobil ? randomMobileUA() : randomUA();
-    const h = {
-      'User-Agent': ua,
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-      'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
-      'Accept-Encoding': 'gzip, deflate',
-      'Referer': mobil ? 'https://m.n11.com/' : 'https://www.n11.com/',
-      'Upgrade-Insecure-Requests': '1',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'same-origin',
-      'Sec-Fetch-User': '?1',
-      'Cache-Control': 'max-age=0',
-      'DNT': '1'
-    };
-    if (mobil) {
-      h['sec-ch-ua'] = '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"';
-      h['sec-ch-ua-mobile'] = '?1';
-      h['sec-ch-ua-platform'] = '"Android"';
-    } else {
-      Object.assign(h, CHROME_CLIENT_HINTS);
-    }
-    return h;
-  };
-
-  let html = '';
-  try {
-    const warmUA = randomUA();
-    const cookies = await n11Cookies(warmUA);
-    const headersWithCookie = (i) => {
-      const h = headersFn(i);
-      if (cookies) h['Cookie'] = cookies;
-      return h;
-    };
-    const { response } = await fetchRetry({
-      urls,
-      headersFn: headersWithCookie,
-      retries: urls.length,
-      timeoutMs: BRIGHT_DATA_AKTIF ? 60000 : 20000,
-      baseDelayMs: 1000,
-      etiket: 'N11'
+    await page.goto(`https://www.n11.com/arama?q=${encodeURIComponent(query)}`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000
     });
-    html = await response.text();
-  } catch (e) {
-    console.error('N11 tum denemeler basarisiz:', e.message);
-    _n11CookieCache = { cookies: '', expires: 0 };
-    return [];
-  }
+    await page.waitForSelector('a.product-item', { timeout: 15000 }).catch(() => {});
 
-  // 1) JSON-LD ItemList
-  const items = [];
-  const ldRegex = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
-  let m;
-  while ((m = ldRegex.exec(html)) !== null) {
-    try {
-      const json = JSON.parse(m[1].trim());
-      const nodes = Array.isArray(json) ? json : [json];
-      for (const node of nodes) {
-        const list =
-          (node && node['@type'] === 'ItemList' && node.itemListElement) ||
-          (node && node.mainEntity && node.mainEntity.itemListElement) ||
-          null;
-        if (!Array.isArray(list)) continue;
-        for (const it of list) {
-          const prod = it && (it.item || it);
-          if (!prod || !prod.name) continue;
-          const offers = prod.offers || {};
-          const priceRaw = offers.price ?? (Array.isArray(offers) && offers[0]?.price) ?? null;
-          const fiyatNum = parseFloat(String(priceRaw).replace(',', '.'));
-          if (!fiyatNum || isNaN(fiyatNum)) continue;
-          items.push({
-            urun: String(prod.name).substring(0, 80),
-            fiyat: fiyatBicimle(fiyatNum),
-            fiyatSayi: fiyatNum,
-            link: prod.url || '',
-            img: prod.image || '',
-            platform: 'N11'
-          });
+    await page.evaluate(() => window.scrollBy(0, 2000));
+    await bekle(500);
+
+    const products = await page.evaluate(() => {
+      const items = [];
+      const cards = document.querySelectorAll('a.product-item');
+      cards.forEach((card, idx) => {
+        if (idx >= 20) return;
+
+        const href = card.href || '';
+        if (!href.includes('/urun/')) return;
+
+        const listingImgs = Array.from(card.querySelectorAll('img.listing-items-image'));
+        let img = '';
+        for (const el of listingImgs) {
+          const src = el.getAttribute('src') || '';
+          const dataSrc = el.getAttribute('data-src') || '';
+          if (src.startsWith('http')) { img = src; break; }
+          if (dataSrc.startsWith('http')) { img = dataSrc; break; }
         }
-      }
-    } catch (_) {}
-  }
 
-  // 2) Fallback HTML kart regex
-  if (items.length === 0) {
-    const cardRe = /<a[^>]+class="[^"]*\bproduct-item\b[^"]*"[^>]+href="([^"]+)"[\s\S]*?(?=<a[^>]+class="[^"]*\bproduct-item\b|<\/li>)/g;
-    let c;
-    while ((c = cardRe.exec(html)) !== null) {
-      const chunk = c[0];
-      const href = c[1];
-      if (!href.includes('/urun/')) continue;
-      const nameM =
-        chunk.match(/<img[^>]+class="[^"]*listing-items-image[^"]*"[^>]+alt="([^"]+)"/) ||
-        chunk.match(/title="([^"]+)"/) ||
-        chunk.match(/<h3[^>]*>([^<]+)<\/h3>/);
-      const imgM =
-        chunk.match(/<img[^>]+class="[^"]*listing-items-image[^"]*"[^>]+(?:data-src|src)="(https?:[^"]+)"/) ||
-        chunk.match(/<img[^>]+(?:data-src|src)="(https?:[^"]+)"/);
-      const priceM = chunk.match(/([\d.]+,\d{2})\s*TL/) || chunk.match(/(\d[\d.]*)\s*TL/);
-      if (!nameM || !priceM) continue;
-      const fiyatNum = parseFloat(priceM[1].replace(/\./g, '').replace(',', '.'));
-      if (!fiyatNum || isNaN(fiyatNum)) continue;
-      const linkAbs = href.startsWith('http') ? href : `https://www.n11.com${href}`;
-      items.push({
-        urun: nameM[1].trim().substring(0, 80),
-        fiyat: fiyatBicimle(fiyatNum),
-        fiyatSayi: fiyatNum,
-        link: linkAbs,
-        img: imgM ? imgM[1] : '',
-        platform: 'N11'
+        const name = (
+          listingImgs[0]?.getAttribute('alt') ||
+          card.querySelector('.product-text-area [title]')?.getAttribute('title') ||
+          ''
+        ).trim();
+
+        const lines = (card.innerText || '').split('\n').map(t => t.trim()).filter(Boolean);
+        const priceLines = lines.filter(l => /^[\d.,]+\s*TL$/.test(l));
+        const priceText = priceLines[priceLines.length - 1];
+
+        if (name.length > 5 && priceText && href) {
+          const fiyatSayi = parseFloat(
+            priceText.replace(/\s*TL$/, '').replace(/\./g, '').replace(',', '.')
+          );
+          if (!isNaN(fiyatSayi) && fiyatSayi > 0) {
+            items.push({
+              urun: name.substring(0, 80),
+              fiyat: priceText,
+              fiyatSayi,
+              link: href,
+              img,
+              platform: 'N11'
+            });
+          }
+        }
       });
-      if (items.length >= 20) break;
-    }
-  }
+      return items;
+    });
 
-  let result = items.slice(0, 20).filter(p => urunAlakaliMi(p.urun, query));
-  if (butce) result = result.filter(p => p.fiyatSayi <= butce);
-  return result;
+    let result = products.filter(p => urunAlakaliMi(p.urun, query));
+    if (butce) result = result.filter(p => p.fiyatSayi <= butce);
+    return result;
+  });
 }
-
 
 // AI SIRALAMA
 async function aiSirala(products, query, butce) {
@@ -973,12 +729,7 @@ app.get('/api/result/:jobId', (req, res) => {
 const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => {
   console.log(`Synyor calisiyor: port ${PORT}`);
-  console.log('Trendyol + Hepsiburada + N11 aktif!');
-  if (BRIGHT_DATA_AKTIF) {
-    console.log(`Bright Data Web Unlocker AKTIF: zone="${BRIGHT_DATA_ZONE}" format="${BRIGHT_DATA_FORMAT}" country="${BRIGHT_DATA_COUNTRY}" -> Trendyol + N11`);
-  } else {
-    console.warn('UYARI: BRIGHT_DATA_KEY .env\'de yok - Trendyol/N11 dogrudan istekle gidiyor');
-  }
+  console.log('Trendyol + Hepsiburada + N11 (hepsi Puppeteer, paylasilan browser) aktif!');
   // Browser'i onceden baslat: ilk arama da hizli olsun
   getBrowser().catch(e => console.error('Browser onayli baslatma hatasi:', e.message));
 });
