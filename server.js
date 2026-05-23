@@ -120,11 +120,12 @@ function urunAlakaliMi(urunAdi, query) {
 // TRENDYOL SCRAPER
 async function trendyolScraper(query, butce) {
   return withPage(async (page) => {
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
-    window.chrome = { runtime: {} };
-  });
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+  const ua = randomUA();
+  await camufleEt(page, ua);
+  await page.setExtraHTTPHeaders(gercekciHeaders({
+    referer: 'https://www.google.com/',
+    dil: 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
+  }));
   await page.goto(`https://www.trendyol.com/sr?q=${encodeURIComponent(query)}&os=1`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   // Kartlar belirsin
   await page.waitForSelector('a.product-card', { timeout: 15000 }).catch(() => {});
@@ -310,10 +311,12 @@ async function hepsiburadaScraper(query, butce) {
 // N11 SCRAPER
 async function n11Scraper(query, butce) {
   return withPage(async (page) => {
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
-  });
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+  const ua = randomUA();
+  await camufleEt(page, ua);
+  await page.setExtraHTTPHeaders(gercekciHeaders({
+    referer: 'https://www.n11.com/',
+    dil: 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
+  }));
   await page.goto(`https://www.n11.com/arama?q=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForSelector('a.product-item', { timeout: 15000 }).catch(() => {});
 
@@ -551,6 +554,76 @@ async function duzeltSorgu(query) {
 function sorguDegistiMi(orijinal, duzeltilmis) {
   const norm = s => normalizeTr(s).replace(/\s+/g, ' ').trim();
   return norm(orijinal) !== norm(duzeltilmis);
+}
+
+// Gercek tarayici fingerprint'leri - bot tespitini atlatmak icin
+const UA_LIST = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0'
+];
+
+function randomUA() {
+  return UA_LIST[Math.floor(Math.random() * UA_LIST.length)];
+}
+
+// Chrome icin sec-ch-ua client hints (Chrome 131)
+const CHROME_CLIENT_HINTS = {
+  'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"'
+};
+
+function gercekciHeaders({ referer, dil = 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7' } = {}) {
+  const h = {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'Accept-Language': dil,
+    'Accept-Encoding': 'gzip, deflate, br, zstd',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': referer ? 'same-origin' : 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
+    ...CHROME_CLIENT_HINTS
+  };
+  if (referer) h['Referer'] = referer;
+  return h;
+}
+
+async function camufleEt(page, ua) {
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'languages', { get: () => ['tr-TR', 'tr', 'en-US', 'en'] });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+    window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+    // WebGL vendor spoof
+    const getParam = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function (p) {
+      if (p === 37445) return 'Intel Inc.';
+      if (p === 37446) return 'Intel Iris OpenGL Engine';
+      return getParam.call(this, p);
+    };
+    // Permissions spoof
+    const origQuery = window.navigator.permissions && window.navigator.permissions.query;
+    if (origQuery) {
+      window.navigator.permissions.query = (p) =>
+        p && p.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission })
+          : origQuery(p);
+    }
+  });
+  await page.setUserAgent(ua);
+  await page.setViewport({
+    width: 1366 + Math.floor(Math.random() * 200),
+    height: 768 + Math.floor(Math.random() * 200),
+    deviceScaleFactor: 1
+  });
 }
 
 // IN-MEMORY JOB STORE
