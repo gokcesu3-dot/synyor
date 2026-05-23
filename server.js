@@ -135,13 +135,11 @@ function randomMobileUA() {
   return MOBILE_UA_LIST[Math.floor(Math.random() * MOBILE_UA_LIST.length)];
 }
 
-// Bright Data Web Scraper API - BRIGHT_DATA_KEY env'de varsa Authorization header eklenir
+// Bright Data Web Scraper API
+// POST https://api.brightdata.com/request, body { url, country }, Bearer auth
 const BRIGHT_DATA_AKTIF = !!process.env.BRIGHT_DATA_KEY;
-function brightDataHeaders() {
-  return BRIGHT_DATA_AKTIF
-    ? { 'Authorization': 'Bearer ' + process.env.BRIGHT_DATA_KEY }
-    : {};
-}
+const BRIGHT_DATA_ENDPOINT = 'https://api.brightdata.com/request';
+const BRIGHT_DATA_COUNTRY = 'tr';
 
 // Generic retry: birden fazla URL ve deneme, exponential backoff + jitter
 async function fetchRetry({ urls, headersFn, retries = 3, timeoutMs = 15000, baseDelayMs = 800, etiket = 'fetch' }) {
@@ -149,11 +147,26 @@ async function fetchRetry({ urls, headersFn, retries = 3, timeoutMs = 15000, bas
   for (let i = 0; i < retries; i++) {
     const url = urls[i % urls.length];
     try {
-      const r = await fetch(url, {
-        headers: headersFn(i),
-        redirect: 'follow',
-        signal: AbortSignal.timeout(timeoutMs)
-      });
+      let r;
+      if (BRIGHT_DATA_AKTIF) {
+        // Bright Data: POST api.brightdata.com/request, body { url, country }
+        r = await fetch(BRIGHT_DATA_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + process.env.BRIGHT_DATA_KEY,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ url, country: BRIGHT_DATA_COUNTRY }),
+          redirect: 'follow',
+          signal: AbortSignal.timeout(timeoutMs)
+        });
+      } else {
+        r = await fetch(url, {
+          headers: headersFn(i),
+          redirect: 'follow',
+          signal: AbortSignal.timeout(timeoutMs)
+        });
+      }
       if (r.ok) return { response: r, url };
       lastErr = new Error(`HTTP ${r.status}`);
       console.error(`${etiket} deneme ${i + 1}/${retries} -> ${r.status} (${url})`);
@@ -192,8 +205,7 @@ async function trendyolHtmlFallback(query) {
     'Sec-Fetch-Mode': 'navigate',
     'Sec-Fetch-Site': 'cross-site',
     'Sec-Fetch-User': '?1',
-    ...CHROME_CLIENT_HINTS,
-    ...brightDataHeaders()
+    ...CHROME_CLIENT_HINTS
   });
 
   const { response } = await fetchRetry({
@@ -274,8 +286,7 @@ async function trendyolScraper(query, butce) {
     'Sec-Fetch-Dest': 'empty',
     'Sec-Fetch-Mode': 'cors',
     'Sec-Fetch-Site': 'same-site',
-    ...CHROME_CLIENT_HINTS,
-    ...brightDataHeaders()
+    ...CHROME_CLIENT_HINTS
   });
 
   let raw = [];
@@ -456,8 +467,7 @@ async function n11Cookies(ua) {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
         'Accept-Encoding': 'gzip, deflate',
-        'Upgrade-Insecure-Requests': '1',
-        ...brightDataHeaders()
+        'Upgrade-Insecure-Requests': '1'
       },
       redirect: 'follow',
       signal: AbortSignal.timeout(10000)
@@ -511,7 +521,6 @@ async function n11Scraper(query, butce) {
     } else {
       Object.assign(h, CHROME_CLIENT_HINTS);
     }
-    Object.assign(h, brightDataHeaders());
     return h;
   };
 
@@ -969,7 +978,7 @@ const server = app.listen(PORT, () => {
   console.log(`Synyor calisiyor: port ${PORT}`);
   console.log('Trendyol + Hepsiburada + N11 aktif!');
   if (BRIGHT_DATA_AKTIF) {
-    console.log('Bright Data AKTIF (Trendyol + N11 isteklerine Authorization header eklenecek)');
+    console.log(`Bright Data AKTIF: POST ${BRIGHT_DATA_ENDPOINT} (country=${BRIGHT_DATA_COUNTRY}) uzerinden Trendyol + N11`);
   } else {
     console.warn('UYARI: BRIGHT_DATA_KEY .env\'de yok - Trendyol/N11 dogrudan istekle gidiyor (Render IP\'si engellenebilir)');
   }
