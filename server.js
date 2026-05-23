@@ -304,7 +304,19 @@ async function trendyolScraper(query, butce) {
       timeoutMs: BRIGHT_DATA_AKTIF ? 60000 : 15000,
       etiket: 'Trendyol API'
     });
-    const data = await response.json();
+    // Once text al, sonra safe JSON parse - Bright Data bos/HTML/error donderebilir
+    const text = await response.text();
+    if (!text || !text.trim()) {
+      throw new Error('Trendyol API: bos response');
+    }
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (parseErr) {
+      console.error('Trendyol API JSON parse hata:', parseErr.message);
+      console.error('Response (ilk 500 char):', text.substring(0, 500));
+      throw new Error(`JSON parse: ${parseErr.message}`);
+    }
     raw = data?.result?.products || [];
   } catch (e) {
     console.error('Trendyol API tum denemeler basarisiz, HTML fallback denenecek:', e.message);
@@ -991,16 +1003,54 @@ const server = app.listen(PORT, () => {
   getBrowser().catch(e => console.error('Browser onayli baslatma hatasi:', e.message));
 });
 
+let _kapaniyor = false;
 async function shutdown(signal) {
+  if (_kapaniyor) return;
+  _kapaniyor = true;
   console.log(`${signal} alindi, kapaniliyor...`);
-  server.close();
+
+  // Render varsayilan 30s SIGTERM grace period veriyor; biz 10s'de tamamlayalim
+  const hardTimeout = setTimeout(() => {
+    console.error('Shutdown timeout - zorla cikiliyor');
+    process.exit(1);
+  }, 10000);
+  hardTimeout.unref();
+
+  // 1) HTTP server'i kapat (yeni baglanti kabul etme)
+  await new Promise((resolve) => {
+    server.close((err) => {
+      if (err) console.error('HTTP server kapatma hatasi:', err.message);
+      else console.log('HTTP server kapatildi');
+      resolve();
+    });
+  });
+
+  // 2) Browser'i kapat (varsa)
   if (browserPromise) {
     try {
       const b = await browserPromise;
-      await b.close();
-    } catch (_) {}
+      if (b && b.isConnected()) {
+        // Once tum acik page'leri kapat, sonra browser
+        const pages = await b.pages().catch(() => []);
+        await Promise.all(pages.map(p => p.close().catch(() => {})));
+        await b.close();
+        console.log('Browser kapatildi');
+      }
+    } catch (e) {
+      console.error('Browser kapatma hatasi:', e.message);
+    }
+    browserPromise = null;
   }
+
+  clearTimeout(hardTimeout);
+  console.log('Kapaniliyor (exit 0)');
   process.exit(0);
 }
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('uncaughtException', (e) => {
+  console.error('uncaughtException:', e);
+});
+process.on('unhandledRejection', (e) => {
+  console.error('unhandledRejection:', e);
+});
