@@ -135,14 +135,13 @@ function randomMobileUA() {
   return MOBILE_UA_LIST[Math.floor(Math.random() * MOBILE_UA_LIST.length)];
 }
 
-// ScraperAPI proxy wrapper - SCRAPER_API_KEY .env'de varsa hedef URL'i proxy uzerinden cevirir
-function scraperApi(targetUrl) {
-  const key = process.env.SCRAPER_API_KEY;
-  if (!key) return targetUrl; // Anahtar yoksa dogrudan git (lokal gelistirme)
-  return `http://api.scraperapi.com?api_key=${key}&url=${encodeURIComponent(targetUrl)}&country_code=tr`;
+// Bright Data Web Scraper API - BRIGHT_DATA_KEY env'de varsa Authorization header eklenir
+const BRIGHT_DATA_AKTIF = !!process.env.BRIGHT_DATA_KEY;
+function brightDataHeaders() {
+  return BRIGHT_DATA_AKTIF
+    ? { 'Authorization': 'Bearer ' + process.env.BRIGHT_DATA_KEY }
+    : {};
 }
-
-const SCRAPER_API_AKTIF = !!process.env.SCRAPER_API_KEY;
 
 // Generic retry: birden fazla URL ve deneme, exponential backoff + jitter
 async function fetchRetry({ urls, headersFn, retries = 3, timeoutMs = 15000, baseDelayMs = 800, etiket = 'fetch' }) {
@@ -179,8 +178,8 @@ async function fetchRetry({ urls, headersFn, retries = 3, timeoutMs = 15000, bas
 async function trendyolHtmlFallback(query) {
   const qEnc = encodeURIComponent(query);
   const urls = [
-    scraperApi(`https://www.trendyol.com/sr?q=${qEnc}`),
-    scraperApi(`https://www.trendyol.com/sr?q=${qEnc}&os=1`)
+    `https://www.trendyol.com/sr?q=${qEnc}`,
+    `https://www.trendyol.com/sr?q=${qEnc}&os=1`
   ];
   const headersFn = (i) => ({
     'User-Agent': i % 2 === 0 ? randomUA() : randomMobileUA(),
@@ -193,14 +192,15 @@ async function trendyolHtmlFallback(query) {
     'Sec-Fetch-Mode': 'navigate',
     'Sec-Fetch-Site': 'cross-site',
     'Sec-Fetch-User': '?1',
-    ...CHROME_CLIENT_HINTS
+    ...CHROME_CLIENT_HINTS,
+    ...brightDataHeaders()
   });
 
   const { response } = await fetchRetry({
     urls,
     headersFn,
     retries: 3,
-    timeoutMs: SCRAPER_API_AKTIF ? 60000 : 20000,
+    timeoutMs: BRIGHT_DATA_AKTIF ? 60000 : 20000,
     etiket: 'Trendyol HTML'
   });
   const html = await response.text();
@@ -258,10 +258,10 @@ async function trendyolScraper(query, butce) {
   const qEnc = encodeURIComponent(query);
   // Trendyol'un birden fazla CDN/regional API noktasi var, IP'ye gore bazilari acik kalabilir
   const endpoints = [
-    scraperApi(`https://public-mdc.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`),
-    scraperApi(`https://public.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`),
-    scraperApi(`https://public-sdc.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`),
-    scraperApi(`https://apigw.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`)
+    `https://public-mdc.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`,
+    `https://public.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`,
+    `https://public-sdc.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`,
+    `https://apigw.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${qEnc}&culture=tr-TR&storefrontId=1`
   ];
 
   const headersFn = (i) => ({
@@ -274,7 +274,8 @@ async function trendyolScraper(query, butce) {
     'Sec-Fetch-Dest': 'empty',
     'Sec-Fetch-Mode': 'cors',
     'Sec-Fetch-Site': 'same-site',
-    ...CHROME_CLIENT_HINTS
+    ...CHROME_CLIENT_HINTS,
+    ...brightDataHeaders()
   });
 
   let raw = [];
@@ -284,7 +285,7 @@ async function trendyolScraper(query, butce) {
       urls: endpoints,
       headersFn,
       retries: endpoints.length,
-      timeoutMs: SCRAPER_API_AKTIF ? 60000 : 15000,
+      timeoutMs: BRIGHT_DATA_AKTIF ? 60000 : 15000,
       etiket: 'Trendyol API'
     });
     const data = await response.json();
@@ -443,8 +444,8 @@ async function hepsiburadaScraper(query, butce) {
 // N11 anasayfasini cagirip Set-Cookie'den cerez topla - bot tespitini atlatmaya yardimci
 let _n11CookieCache = { cookies: '', expires: 0 };
 async function n11Cookies(ua) {
-  // ScraperAPI aktifse cerez warm-up gereksiz - her istek baska IP/oturum uzerinden gider
-  if (SCRAPER_API_AKTIF) return '';
+  // Bright Data aktifse cerez warm-up gereksiz - proxy oturumu kendi tarafinda yonetir
+  if (BRIGHT_DATA_AKTIF) return '';
   if (_n11CookieCache.expires > Date.now() && _n11CookieCache.cookies) {
     return _n11CookieCache.cookies;
   }
@@ -455,7 +456,8 @@ async function n11Cookies(ua) {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
         'Accept-Encoding': 'gzip, deflate',
-        'Upgrade-Insecure-Requests': '1'
+        'Upgrade-Insecure-Requests': '1',
+        ...brightDataHeaders()
       },
       redirect: 'follow',
       signal: AbortSignal.timeout(10000)
@@ -480,8 +482,8 @@ async function n11Cookies(ua) {
 // N11 SCRAPER - search HTML + embedded JSON-LD, retry + mobil fallback
 async function n11Scraper(query, butce) {
   const qEnc = encodeURIComponent(query);
-  const desktopUrl = scraperApi(`https://www.n11.com/arama?q=${qEnc}`);
-  const mobileUrl = scraperApi(`https://m.n11.com/arama?q=${qEnc}`);
+  const desktopUrl = `https://www.n11.com/arama?q=${qEnc}`;
+  const mobileUrl = `https://m.n11.com/arama?q=${qEnc}`;
   // Once desktop, fail edersse mobile, sonra tekrar desktop farkli UA
   const urls = [desktopUrl, mobileUrl, desktopUrl, mobileUrl];
 
@@ -509,6 +511,7 @@ async function n11Scraper(query, butce) {
     } else {
       Object.assign(h, CHROME_CLIENT_HINTS);
     }
+    Object.assign(h, brightDataHeaders());
     return h;
   };
 
@@ -528,7 +531,7 @@ async function n11Scraper(query, butce) {
       urls,
       headersFn: headersWithCookie,
       retries: urls.length,
-      timeoutMs: SCRAPER_API_AKTIF ? 60000 : 20000,
+      timeoutMs: BRIGHT_DATA_AKTIF ? 60000 : 20000,
       baseDelayMs: 1000,
       etiket: 'N11'
     });
@@ -965,10 +968,10 @@ const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => {
   console.log(`Synyor calisiyor: port ${PORT}`);
   console.log('Trendyol + Hepsiburada + N11 aktif!');
-  if (SCRAPER_API_AKTIF) {
-    console.log('ScraperAPI proxy AKTIF (Trendyol + N11 istekleri proxy uzerinden)');
+  if (BRIGHT_DATA_AKTIF) {
+    console.log('Bright Data AKTIF (Trendyol + N11 isteklerine Authorization header eklenecek)');
   } else {
-    console.warn('UYARI: SCRAPER_API_KEY .env\'de yok - Trendyol/N11 dogrudan istekle gidiyor (Render IP\'si engellenebilir)');
+    console.warn('UYARI: BRIGHT_DATA_KEY .env\'de yok - Trendyol/N11 dogrudan istekle gidiyor (Render IP\'si engellenebilir)');
   }
   // Browser'i onceden baslat: ilk arama da hizli olsun
   getBrowser().catch(e => console.error('Browser onayli baslatma hatasi:', e.message));
