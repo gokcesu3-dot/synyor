@@ -20,6 +20,8 @@ async function launchBrowser() {
       '--disable-setuid-sandbox',
       '--disable-gpu',
       '--disable-dev-shm-usage',
+      '--no-zygote',
+      '--single-process',
       '--disable-blink-features=AutomationControlled'
     ],
     defaultViewport: chromium.defaultViewport,
@@ -123,9 +125,9 @@ async function trendyolScraper(query, butce) {
     window.chrome = { runtime: {} };
   });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-  await page.goto(`https://www.trendyol.com/sr?q=${encodeURIComponent(query)}&os=1`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await page.goto(`https://www.trendyol.com/sr?q=${encodeURIComponent(query)}&os=1`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   // Kartlar belirsin
-  await page.waitForSelector('a.product-card', { timeout: 8000 }).catch(() => {});
+  await page.waitForSelector('a.product-card', { timeout: 15000 }).catch(() => {});
 
   // Lazy-load tetikle: kartların img src'leri yüklensin
   await page.evaluate(async () => {
@@ -206,7 +208,7 @@ async function trendyolScraper(query, butce) {
 async function hepsiburadaScraper(query, butce) {
   return withPage(async (page) => {
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-  await page.goto(`https://www.hepsiburada.com/ara?q=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await page.goto(`https://www.hepsiburada.com/ara?q=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await bekle(1200);
 
   const products = await page.evaluate(() => {
@@ -312,8 +314,8 @@ async function n11Scraper(query, butce) {
     Object.defineProperty(navigator, 'webdriver', { get: () => false });
   });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-  await page.goto(`https://www.n11.com/arama?q=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 20000 });
-  await page.waitForSelector('a.product-item', { timeout: 8000 }).catch(() => {});
+  await page.goto(`https://www.n11.com/arama?q=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.waitForSelector('a.product-item', { timeout: 15000 }).catch(() => {});
 
   // Lazy-load görselleri tetiklemek için sayfayı kaydır
   await page.evaluate(() => window.scrollBy(0, 2000));
