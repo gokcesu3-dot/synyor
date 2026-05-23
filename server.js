@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
@@ -117,93 +117,75 @@ function urunAlakaliMi(urunAdi, query) {
   return true;
 }
 
-// TRENDYOL SCRAPER
+// Yardimcilar: fiyat bicimleme
+function fiyatBicimle(n) {
+  return n.toLocaleString('tr-TR', {
+    minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
+    maximumFractionDigits: 2
+  }) + ' TL';
+}
+
+// TRENDYOL SCRAPER - public arama API'si (fetch ile, puppeteer YOK)
 async function trendyolScraper(query, butce) {
-  return withPage(async (page) => {
-  const ua = randomUA();
-  await camufleEt(page, ua);
-  await page.setExtraHTTPHeaders(gercekciHeaders({
-    referer: 'https://www.google.com/',
-    dil: 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
-  }));
-  await page.goto(`https://www.trendyol.com/sr?q=${encodeURIComponent(query)}&os=1`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  // Kartlar belirsin
-  await page.waitForSelector('a.product-card', { timeout: 15000 }).catch(() => {});
+  const url = `https://public.trendyol.com/discovery-web-searchgw-service/v2/api/infinite-scroll/sr?q=${encodeURIComponent(query)}&culture=tr-TR&storefrontId=1`;
 
-  // Lazy-load tetikle: kartların img src'leri yüklensin
-  await page.evaluate(async () => {
-    await new Promise(resolve => {
-      let y = 0;
-      const step = 600;
-      const timer = setInterval(() => {
-        window.scrollBy(0, step);
-        y += step;
-        if (y >= 4000) { clearInterval(timer); resolve(); }
-      }, 50);
+  let data;
+  try {
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': randomUA(),
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Origin': 'https://www.trendyol.com',
+        'Referer': `https://www.trendyol.com/sr?q=${encodeURIComponent(query)}`,
+        ...CHROME_CLIENT_HINTS
+      },
+      signal: AbortSignal.timeout(15000)
     });
-  });
-  await bekle(600);
-
-  const products = await page.evaluate(() => {
-    const items = [];
-    const cards = document.querySelectorAll('a.product-card');
-    cards.forEach((card, idx) => {
-      if (idx >= 15) return;
-      const href = card.href;
-
-      // Karttaki ilk gercek (http ile baslayan, placeholder olmayan) urun gorselini bul
-      const imgEls = Array.from(card.querySelectorAll('img'));
-      let img = '';
-      for (const el of imgEls) {
-        const cands = [el.getAttribute('src'), el.getAttribute('data-src'), el.dataset?.src];
-        for (const c of cands) {
-          if (c && c.startsWith('http') && !c.includes('data:image') && !c.includes('placeholder')) {
-            img = c;
-            break;
-          }
-        }
-        if (img) break;
-      }
-      const allText = card.innerText ? card.innerText.split('\n').map(t => t.trim()).filter(t => t.length > 0) : [];
-
-      // Gerçek fiyat bul - rakam+TL formatı (NBSP ve normal boşluğa toleranslı)
-      const fiyatSatiri = allText.find(t => /^[\d.,]+[\s ]*TL$/.test(t));
-      
-      const temizAd = allText.find(t =>
-        t.length > 10 &&
-        !t.includes('Hızlı') && !t.includes('Bakış') &&
-        !t.includes('En Çok') && !t.includes('Birlikte') &&
-        !t.includes('Sepette') && !t.includes('Kupon') &&
-        !t.includes('İndirim') && !t.includes('Ürün') &&
-        !t.includes('Satıcı') && !t.includes('Fiyatı') &&
-        !t.includes('Günün') && !t.includes('Fenomen') &&
-        !t.match(/^\d+$/) && !t.match(/^\d+\s*TL/)
-      );
-
-      // Sadece fiyatı olan ürünleri ekle
-      if (temizAd && fiyatSatiri) {
-        items.push({
-          urun: temizAd.substring(0, 80),
-          fiyat: fiyatSatiri,
-          fiyatSayi: parseFloat(fiyatSatiri.replace(/\s*TL$/, '').replace(/\./g, '').replace(',', '.')),
-          link: href || '',
-          img: img || '',
-          platform: 'Trendyol'
-        });
-      }
-    });
-    return items;
-  });
-
-  let result = products.filter(p => p.urun !== 'Yok' && urunAlakaliMi(p.urun, query));
-
-  if (butce) {
-    result = result.filter(p => p.fiyatSayi <= butce);
+    if (!r.ok) {
+      console.error('Trendyol API HTTP', r.status);
+      return [];
+    }
+    data = await r.json();
+  } catch (e) {
+    console.error('Trendyol fetch hata:', e.message);
+    return [];
   }
 
+  const raw = data?.result?.products || [];
+  const items = raw.slice(0, 20).map(p => {
+    const fiyatNum =
+      p.price?.discountedPrice?.value ??
+      p.price?.sellingPrice?.value ??
+      p.price?.originalPrice?.value ?? 0;
+
+    let img = '';
+    const imgRaw = (Array.isArray(p.images) && p.images[0]) || p.imageUrl || '';
+    if (imgRaw) {
+      const s = typeof imgRaw === 'string' ? imgRaw : (imgRaw.url || '');
+      if (s) img = s.startsWith('http') ? s : `https://cdn.dsmcdn.com${s.startsWith('/') ? '' : '/'}${s}`;
+    }
+
+    const linkRaw = p.url || '';
+    const link = linkRaw.startsWith('http') ? linkRaw : `https://www.trendyol.com${linkRaw}`;
+    const ad = [p.brand?.name, p.name].filter(Boolean).join(' ').trim() || p.name || '';
+
+    return {
+      urun: ad.substring(0, 80),
+      fiyat: fiyatBicimle(fiyatNum),
+      fiyatSayi: fiyatNum,
+      link,
+      img,
+      platform: 'Trendyol'
+    };
+  }).filter(p => p.urun && p.fiyatSayi > 0 && p.link);
+
+  let result = items.filter(p => urunAlakaliMi(p.urun, query));
+  if (butce) result = result.filter(p => p.fiyatSayi <= butce);
   return result;
-  });
 }
+
 
 // HEPSIBURADA SCRAPER
 async function hepsiburadaScraper(query, butce) {
@@ -308,78 +290,108 @@ async function hepsiburadaScraper(query, butce) {
   });
 }
 
-// N11 SCRAPER
+// N11 SCRAPER - search HTML + embedded JSON-LD (fetch ile, puppeteer YOK)
 async function n11Scraper(query, butce) {
-  return withPage(async (page) => {
-  const ua = randomUA();
-  await camufleEt(page, ua);
-  await page.setExtraHTTPHeaders(gercekciHeaders({
-    referer: 'https://www.n11.com/',
-    dil: 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
-  }));
-  await page.goto(`https://www.n11.com/arama?q=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForSelector('a.product-item', { timeout: 15000 }).catch(() => {});
+  const url = `https://www.n11.com/arama?q=${encodeURIComponent(query)}`;
 
-  // Lazy-load görselleri tetiklemek için sayfayı kaydır
-  await page.evaluate(() => window.scrollBy(0, 2000));
-  await bekle(500);
+  let html;
+  try {
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': randomUA(),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://www.n11.com/',
+        'Upgrade-Insecure-Requests': '1',
+        ...CHROME_CLIENT_HINTS
+      },
+      signal: AbortSignal.timeout(20000)
+    });
+    if (!r.ok) {
+      console.error('N11 HTTP', r.status);
+      return [];
+    }
+    html = await r.text();
+  } catch (e) {
+    console.error('N11 fetch hata:', e.message);
+    return [];
+  }
 
-  const products = await page.evaluate(() => {
-    const items = [];
-    const cards = document.querySelectorAll('a.product-item');
-
-    cards.forEach((card, idx) => {
-      if (idx >= 15) return;
-
-      const href = card.href || '';
-      if (!href.includes('/urun/')) return;
-
-      // Görsel: lazy-load placeholder'ları atla, ilk gerçek http src/data-src'yi al
-      const listingImgs = Array.from(card.querySelectorAll('img.listing-items-image'));
-      let img = '';
-      for (const el of listingImgs) {
-        const src = el.getAttribute('src') || '';
-        const dataSrc = el.getAttribute('data-src') || '';
-        if (src.startsWith('http')) { img = src; break; }
-        if (dataSrc.startsWith('http')) { img = dataSrc; break; }
-      }
-
-      // İsim: ürün resminin alt'ı en temizi
-      const name = (listingImgs[0]?.getAttribute('alt')
-        || card.querySelector('.product-text-area [title]')?.getAttribute('title')
-        || '').trim();
-
-      // Fiyat: innerText'teki son "X TL" satırı (üstü çizili eski fiyat değil, güncel fiyat)
-      const lines = card.innerText.split('\n').map(t => t.trim()).filter(Boolean);
-      const priceLines = lines.filter(l => /^[\d.,]+\s*TL$/.test(l));
-      const priceText = priceLines[priceLines.length - 1];
-
-      if (name.length > 5 && priceText && href) {
-        const fiyatSayi = parseFloat(
-          priceText.replace(/\s*TL$/, '').replace(/\./g, '').replace(',', '.')
-        );
-        if (!isNaN(fiyatSayi) && fiyatSayi > 0) {
+  // 1) JSON-LD ItemList icinden urun listesi cikar
+  const items = [];
+  const ldRegex = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m;
+  while ((m = ldRegex.exec(html)) !== null) {
+    try {
+      const json = JSON.parse(m[1].trim());
+      const nodes = Array.isArray(json) ? json : [json];
+      for (const node of nodes) {
+        const list =
+          (node && node['@type'] === 'ItemList' && node.itemListElement) ||
+          (node && node.mainEntity && node.mainEntity.itemListElement) ||
+          null;
+        if (!Array.isArray(list)) continue;
+        for (const it of list) {
+          const prod = it && (it.item || it);
+          if (!prod || !prod.name) continue;
+          const offers = prod.offers || {};
+          const priceRaw = offers.price ?? (Array.isArray(offers) && offers[0]?.price) ?? null;
+          const fiyatNum = parseFloat(String(priceRaw).replace(',', '.'));
+          if (!fiyatNum || isNaN(fiyatNum)) continue;
           items.push({
-            urun: name.substring(0, 80),
-            fiyat: priceText,
-            fiyatSayi: fiyatSayi,
-            link: href,
-            img: img,
+            urun: String(prod.name).substring(0, 80),
+            fiyat: fiyatBicimle(fiyatNum),
+            fiyatSayi: fiyatNum,
+            link: prod.url || '',
+            img: prod.image || '',
             platform: 'N11'
           });
         }
       }
-    });
-    return items;
-  });
-
-  let result = products.filter(p => urunAlakaliMi(p.urun, query));
-  if (butce) {
-    result = result.filter(p => p.fiyatSayi <= butce);
+    } catch (_) {}
   }
+
+  // 2) JSON-LD bulunamadiysa HTML kart yapisinden regex ile cek
+  if (items.length === 0) {
+    const cardRe = /<a[^>]+class="[^"]*\bproduct-item\b[^"]*"[^>]+href="([^"]+)"[\s\S]*?(?=<a[^>]+class="[^"]*\bproduct-item\b|<\/li>)/g;
+    let c;
+    while ((c = cardRe.exec(html)) !== null) {
+      const chunk = c[0];
+      const href = c[1];
+      if (!href.includes('/urun/')) continue;
+
+      const nameM =
+        chunk.match(/<img[^>]+class="[^"]*listing-items-image[^"]*"[^>]+alt="([^"]+)"/) ||
+        chunk.match(/title="([^"]+)"/) ||
+        chunk.match(/<h3[^>]*>([^<]+)<\/h3>/);
+      const imgM =
+        chunk.match(/<img[^>]+class="[^"]*listing-items-image[^"]*"[^>]+(?:data-src|src)="(https?:[^"]+)"/) ||
+        chunk.match(/<img[^>]+(?:data-src|src)="(https?:[^"]+)"/);
+      const priceM = chunk.match(/([\d.]+,\d{2})\s*TL/) || chunk.match(/(\d[\d.]*)\s*TL/);
+
+      if (!nameM || !priceM) continue;
+      const fiyatNum = parseFloat(priceM[1].replace(/\./g, '').replace(',', '.'));
+      if (!fiyatNum || isNaN(fiyatNum)) continue;
+
+      const linkAbs = href.startsWith('http') ? href : `https://www.n11.com${href}`;
+      items.push({
+        urun: nameM[1].trim().substring(0, 80),
+        fiyat: fiyatBicimle(fiyatNum),
+        fiyatSayi: fiyatNum,
+        link: linkAbs,
+        img: imgM ? imgM[1] : '',
+        platform: 'N11'
+      });
+      if (items.length >= 20) break;
+    }
+  }
+
+  let result = items.slice(0, 20).filter(p => urunAlakaliMi(p.urun, query));
+  if (butce) result = result.filter(p => p.fiyatSayi <= butce);
   return result;
-  });
 }
+
 
 // AI SIRALAMA
 async function aiSirala(products, query, butce) {
